@@ -1,15 +1,17 @@
-import { expectRevert } from '@openzeppelin/test-helpers'
+import { ether, expectRevert } from '@openzeppelin/test-helpers'
 
 import {
   PenalizerInstance,
   RelayHubInstance,
-  TestRecipientInstance
+  SmartWalletInstance,
+  TestRecipientInstance,
+  TestTokenInstance
 } from '../../types/truffle-contracts'
 
 import { createSmartWallet, createSmartWalletFactory, deployHub, getGaslessAccount, getTestingEnvironment } from '../TestUtils'
 import { AccountKeypair } from '../../src/relayclient/AccountManager'
 import { zeroAddress } from 'ethereumjs-util'
-import { createRawTx, fundAccount, RelayHelper } from './Utils'
+import { createRawTx, fundAccount, currentTimeInSeconds, RelayHelper } from './Utils'
 import { fail } from 'assert'
 import { toBN } from 'web3-utils'
 import { TransactionReceipt } from 'web3-core'
@@ -26,6 +28,8 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
   let relayHub: RelayHubInstance
   let penalizer: PenalizerInstance
   let recipient: TestRecipientInstance
+  let forwarder: SmartWalletInstance
+  let token: TestTokenInstance
 
   let sender: AccountKeypair // wallet owner and relay request origin
 
@@ -45,13 +49,13 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
     recipient = await TestRecipient.new()
     const verifier = await TestVerifierEverythingAccepted.new()
     const smartWalletTemplate = await SmartWallet.new()
-    const token = await testToken.new()
+    token = await testToken.new()
 
     sender = await getGaslessAccount() // sender should be able to relay without funds
 
     // smart wallet
     const factory = await createSmartWalletFactory(smartWalletTemplate)
-    const forwarder = await createSmartWallet(relayOwner, sender.address, factory, sender.privateKey, env.chainId)
+    forwarder = await createSmartWallet(relayOwner, sender.address, factory, sender.privateKey, env.chainId)
 
     // relay helper class
     relayHelper = new RelayHelper(relayHub, relayOwner, relayWorker, relayManager, forwarder, verifier, token, env.chainId)
@@ -240,28 +244,7 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
         chainId
       )
 
-      let stakeInfo = await relayHub.getStakeInfo(relayManager)
-      let stake = toBN(stakeInfo.stake)
-
-      const balanceBefore = toBN(await web3.eth.getBalance(sender.address))
-      const toBurn = stake.div(toBN(2))
-      const reward = stake.sub(toBurn)
-
-      let txReceipt: TransactionReceipt
-      try {
-        txReceipt = await web3.eth.sendSignedTransaction(rawTx)
-      } catch (err) {
-        fail(err)
-      }
-
-      stakeInfo = await relayHub.getStakeInfo(relayManager)
-      stake = toBN(stakeInfo.stake)
-
-      const balanceAfter = toBN(await web3.eth.getBalance(sender.address))
-      const gasUsed = toBN(txReceipt.gasUsed)
-
-      assert.isTrue(stake.eq(toBN(0)), 'stake was not burned')
-      assert.isTrue(balanceAfter.eq(balanceBefore.add(reward).sub(gasUsed)), 'unexpected beneficiary balance after claim')
+      await assertStakeIsBurned(relayHub, relayManager, sender, rawTx)
     })
 
     it('and reject them if tx is unfulfilled but penalized', async function () {
@@ -290,6 +273,97 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
     })
   })
 
+  describe('should receive claims according with the commitment time', function () {
+    before(async function () {
+      await penalizer.setHub(relayHub.address, { from: await penalizer.owner() })
+    })
+
+    describe('and accept them', () => {
+      beforeEach(async () => {
+        await relayHub.stakeForAddress(relayManager, 1000, {
+          from: relayOwner,
+          value: ether('1'),
+          gasPrice: gasPrice
+        })
+      })
+
+      const allowedCommitmentTimes = [
+        // due to security implications, we accept up to 15 secs of delay
+        // but we cannot test for the exact time
+        10,
+        0,
+        // set a past commitment time
+        -100,
+        -150
+      ]
+      allowedCommitmentTimes.forEach((timeDiff, index) => {
+        it(`when the commit time is ${Math.abs(timeDiff)} seconds in the ${timeDiff < 0 ? 'past' : 'future'}`, async function () {
+          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbeff1${index}`, enableQos: true })
+          const receipt = relayHelper.createReceipt(rr, sig, currentTimeInSeconds() + timeDiff)
+          await relayHelper.signReceipt(receipt)
+
+          const rawTx = await createRawTx(
+            sender,
+            penalizer.address,
+            penalizer.contract.methods.claim(receipt).encodeABI(),
+            txGas.toString(),
+            gasPrice,
+            chainId
+          )
+          await assertStakeIsBurned(relayHub, relayManager, sender, rawTx)
+        })
+      })
+    })
+
+    describe('and reject them', () => {
+      // commitment time not yet expired, unsuccessful claims
+      // if we set a small future time, the claims can be successful
+      // due to the 15 seconds of delay we accept.
+      const forbiddenCommitmentTime = [
+        60,
+        150,
+        250,
+        350
+      ]
+      forbiddenCommitmentTime.forEach((timeDiff, index) => {
+        it(`when the commit time is ${timeDiff} seconds in the future`, async function () {
+          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbfef1${index}`, enableQos: true })
+          const receipt = relayHelper.createReceipt(rr, sig, currentTimeInSeconds() + timeDiff)
+          await relayHelper.signReceipt(receipt)
+
+          const rawTx = await createRawTx(
+            sender,
+            penalizer.address,
+            penalizer.contract.methods.claim(receipt).encodeABI(),
+            txGas.toString(),
+            gasPrice,
+            chainId
+          )
+
+          await assertTransactionFails(rawTx, 'too early to claim')
+        })
+      })
+    })
+  })
+
+  it('claim should fail if no stake has been added back', async () => {
+    // the stack previously added has been burned from previous successful claims
+    const [rr, sig] = await createRelayRequestAndSignature({ relayData: '0xdeadbfef10', enableQos: true })
+    const receipt = relayHelper.createReceipt(rr, sig)
+    await relayHelper.signReceipt(receipt)
+
+    const rawTx = await createRawTx(
+      sender,
+      penalizer.address,
+      penalizer.contract.methods.claim(receipt).encodeABI(),
+      txGas.toString(),
+      gasPrice,
+      chainId
+    )
+
+    await assertTransactionFails(rawTx)
+  })
+
   interface RelayRequestParams{
     relayData: string
     enableQos?: boolean
@@ -307,3 +381,44 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
     return [rr, sig]
   }
 })
+
+async function assertTransactionFails (rawTx: string, reason?: string): Promise<void> {
+  try {
+    await web3.eth.sendSignedTransaction(rawTx)
+    fail("expected claim to fail, but it didn't")
+  } catch (err) {
+    if (reason === undefined || reason === null) {
+      // we don't want to check why the transaction failed, but only if failed or not.
+      assert(true)
+      return
+    }
+    if (!(err instanceof Error)) {
+      fail('Unknown error')
+    }
+    assert.isTrue(err.message.includes(reason), `unexpected revert reason: ${err.message}`)
+  }
+}
+
+async function assertStakeIsBurned (relayHub: RelayHubInstance, relayManager: string, sender: AccountKeypair, rawTx: string): Promise<void> {
+  let stakeInfo = await relayHub.getStakeInfo(relayManager)
+  let stake = toBN(stakeInfo.stake)
+  const balanceBefore = toBN(await web3.eth.getBalance(sender.address))
+  const toBurn = stake.div(toBN(2))
+  const reward = stake.sub(toBurn)
+
+  let txReceipt: TransactionReceipt
+  try {
+    txReceipt = await web3.eth.sendSignedTransaction(rawTx)
+  } catch (err) {
+    fail(err)
+  }
+
+  stakeInfo = await relayHub.getStakeInfo(relayManager)
+  stake = toBN(stakeInfo.stake)
+
+  const balanceAfter = toBN(await web3.eth.getBalance(sender.address))
+  const gasUsed = toBN(txReceipt.gasUsed)
+
+  assert.isTrue(stake.eq(toBN(0)), 'stake was not burned')
+  assert.isTrue(balanceAfter.eq(balanceBefore.add(reward).sub(gasUsed)), 'unexpected beneficiary balance after claim')
+}
