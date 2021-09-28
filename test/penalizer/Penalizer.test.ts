@@ -298,7 +298,7 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
       ]
       allowedCommitmentTimes.forEach((timeDiff, index) => {
         it(`when the commit time is ${Math.abs(timeDiff)} seconds in the ${timeDiff < 0 ? 'past' : 'future'}`, async function () {
-          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbeff1${index}`, enableQos: true })
+          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbeef2${index}`, enableQos: true })
           const receipt = relayHelper.createReceipt(rr, sig, currentTimeInSeconds() + timeDiff)
           await relayHelper.signReceipt(receipt)
 
@@ -327,7 +327,7 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
       ]
       forbiddenCommitmentTime.forEach((timeDiff, index) => {
         it(`when the commit time is ${timeDiff} seconds in the future`, async function () {
-          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbfef1${index}`, enableQos: true })
+          const [rr, sig] = await createRelayRequestAndSignature({ relayData: `0xdeadbeef3${index}`, enableQos: true })
           const receipt = relayHelper.createReceipt(rr, sig, currentTimeInSeconds() + timeDiff)
           await relayHelper.signReceipt(receipt)
 
@@ -348,7 +348,7 @@ contract('Penalizer', function ([relayOwner, relayWorker, relayManager, otherAcc
 
   it('claim should fail if no stake has been added back', async () => {
     // the stack previously added has been burned from previous successful claims
-    const [rr, sig] = await createRelayRequestAndSignature({ relayData: '0xdeadbfef10', enableQos: true })
+    const [rr, sig] = await createRelayRequestAndSignature({ relayData: '0xdeadbeef11', enableQos: true })
     const receipt = relayHelper.createReceipt(rr, sig)
     await relayHelper.signReceipt(receipt)
 
