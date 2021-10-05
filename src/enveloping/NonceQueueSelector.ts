@@ -1,9 +1,14 @@
+import log from 'loglevel'
 import { FeesTable } from './FeeEstimator'
 
 /**
  * For each transaction that is submitted, chooses which nonce queue will be used, based on existing rules.
  */
 export class NonceQueueSelector {
+  constructor () {
+    log.setLevel(0)
+  }
+
   /**
    * Returns the recommended gas price for a transaction to be included before the given time, by
    * applying a determined set of rules.
@@ -51,6 +56,7 @@ export class NonceQueueSelector {
    */
   applyDelayRule (maxTime: number): number {
     const delay = (maxTime - Date.now()) / 1000
+    log.debug('NonceQueueSelector#applyDelayRule.delay: maxTime, delay', maxTime, delay)
     let workerIndex = 0
     if (delay > 300) {
       workerIndex = 0

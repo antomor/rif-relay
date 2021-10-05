@@ -27,6 +27,7 @@ export default class RelaySelectionManager {
   public errors: Map<string, Error> = new Map<string, Error>()
 
   constructor (transactionDetails: EnvelopingTransactionDetails, knownRelaysManager: KnownRelaysManager, httpClient: HttpClient, pingFilter: PingFilter, config: EnvelopingConfig, maxTime?: number) {
+    log.setLevel(config.logLevel)
     this.transactionDetails = transactionDetails
     this.knownRelaysManager = knownRelaysManager
     this.httpClient = httpClient
@@ -142,6 +143,7 @@ export default class RelaySelectionManager {
   async _getRelayAddressPing (relayInfo: RelayInfoUrl): Promise<PartialRelayInfo> {
     log.info(`getRelayAddressPing URL: ${relayInfo.relayUrl}`)
     const pingResponse = await this.httpClient.getPingResponse(relayInfo.relayUrl, this.transactionDetails.callVerifier, this.maxTime)
+    log.debug('RelaySelectionManager#pingResponse', pingResponse)
 
     if (!pingResponse.ready) {
       throw new Error(`Relay not ready ${JSON.stringify(pingResponse)}`)

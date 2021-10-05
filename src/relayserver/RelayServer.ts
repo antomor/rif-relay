@@ -87,8 +87,8 @@ export class RelayServer extends EventEmitter {
     this.workerAddress = this.transactionManager.workersKeyManager.getAddresses()
     this.customReplenish = this.config.customReplenish
     this.workerBalanceRequired = new AmountRequired('Worker Balance', toBN(this.config.workerMinBalance))
-    this.printServerAddresses()
     log.setLevel(this.config.logLevel)
+    this.printServerAddresses()
     log.warn('RelayServer version', VERSION)
     log.info('Using server configuration:\n', this.config)
   }
@@ -123,6 +123,7 @@ export class RelayServer extends EventEmitter {
     const relayWorkerAddress = this.envelopingArbiter.getQueueWorker(this.workerAddress, maxTime)
     const minGasPrice = await this.envelopingArbiter.getQueueGasPrice(maxTime)
     const maxDelay = this.envelopingArbiter.checkMaxDelayForResponse(maxTime)
+    log.debug('RelayServer#pingHandler: maxTime, maxDelay', maxTime, maxDelay)
     return {
       relayWorkerAddress,
       relayManagerAddress: this.managerAddress,

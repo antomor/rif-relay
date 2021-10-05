@@ -47,6 +47,7 @@ export class RelayProvider implements HttpProvider {
    */
   constructor (origProvider: HttpProvider, envelopingConfig: Partial<EnvelopingConfig>, overrideDependencies?: Partial<EnvelopingDependencies>, relayClient?: RelayClient) {
     const config = configure(envelopingConfig)
+    log.setLevel(config.logLevel)
     this.host = origProvider.host
     this.connected = origProvider.connected
 
